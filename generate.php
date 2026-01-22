@@ -89,7 +89,6 @@ if (!file_exists($STATE_FILE)) {
     $glow      = (int)($_POST['glow'] ?? 20);
 
     if ($text === "") {
-        print_r($_POST);die;
         writeProgress(["stage"=>"error","message"=>"Text is required"]);
         exit;
     }
