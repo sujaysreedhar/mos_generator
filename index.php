@@ -88,6 +88,7 @@ button:hover { background:#125aa0; }
 
   <label>Poster Height (feet)</label>
   <input type="number" name="height_ft" value="10" min="1" step="0.1" required>
+  <div class="smallNote">Maximum size is limited to 200,000,000 total pixels.</div>
 
   <!-- MODE -->
   <label>Mode</label>
@@ -150,6 +151,7 @@ let selectedFiles = [];
 // Client limits (adjust)
 const MAX_FILES = 1500;
 const MAX_TOTAL_MB = 500; // total upload size guard (client)
+const MAX_PIXEL_AREA = 200000000;
 const ALLOWED_PREFIX = "image/";
 
 function bytesToMB(b){ return b / (1024*1024); }
@@ -281,6 +283,20 @@ function startGeneration() {
     showError("Please select at least 1 image.");
     return;
   }
+
+  const widthFt = parseFloat(form.elements.width_ft.value || "0");
+  const heightFt = parseFloat(form.elements.height_ft.value || "0");
+  const mode = form.elements.mode.value;
+  const dpiInput = parseInt(form.elements.dpi.value || "0", 10);
+  const dpi = mode === "preview" ? 30 : Math.min(600, Math.max(30, dpiInput || 150));
+  const widthPx = Math.round(widthFt * 12 * dpi);
+  const heightPx = Math.round(heightFt * 12 * dpi);
+  const pixelArea = widthPx * heightPx;
+  if (!widthPx || !heightPx || pixelArea > MAX_PIXEL_AREA) {
+    showError("Poster size too large.");
+    return;
+  }
+
   showError("");
 
   document.getElementById("progressContainer").style.display = "block";

@@ -116,6 +116,13 @@ if (!file_exists($STATE_FILE)) {
         exit;
     }
 
+    $maxPixelArea = 200000000;
+    $pixelArea = $width_px * $height_px;
+    if ($pixelArea > $maxPixelArea) {
+        writeProgress(["stage"=>"error","message"=>"Poster size too large"]);
+        exit;
+    }
+
     // server-side upload validation
     if (empty($_FILES['images']) || empty($_FILES['images']['tmp_name'])) {
         writeProgress(["stage"=>"error","message"=>"No images uploaded"]);
