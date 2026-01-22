@@ -34,18 +34,35 @@ function safeMkdir($dir) {
 function avgBrightness($path) {
     $img = @imagecreatefromstring(@file_get_contents($path));
     if (!$img) return 0;
-    $w = imagesx($img); $h = imagesy($img);
-    $r=$g=$b=0; $n=40;
-    for ($i=0;$i<$n;$i++) {
-        $rgb = imagecolorat($img, rand(0,$w-1), rand(0,$h-1));
-        $r += ($rgb>>16)&255;
-        $g += ($rgb>>8)&255;
-        $b += $rgb&255;
+    $sample = imagecreatetruecolor(20, 20);
+    imagecopyresampled($sample, $img, 0, 0, 0, 0, 20, 20, imagesx($img), imagesy($img));
+    $r=$g=$b=0;
+    for ($y=0; $y<20; $y++) {
+        for ($x=0; $x<20; $x++) {
+            $rgb = imagecolorat($sample, $x, $y);
+            $r += ($rgb>>16)&255;
+            $g += ($rgb>>8)&255;
+            $b += $rgb&255;
+        }
     }
+    imagedestroy($sample);
     imagedestroy($img);
-    return ($r+$g+$b)/($n*3);
+    return ($r+$g+$b)/(20*20*3);
 }
 function clampInt($v,$min,$max){ return max($min, min($max, (int)$v)); }
+function bucketIndex($brightness, $bucketSize) {
+    return max(0, (int)floor($brightness / $bucketSize));
+}
+function buildBuckets($paths, $brightnessMap, $bucketSize) {
+    $buckets = [];
+    foreach ($paths as $path) {
+        $b = $brightnessMap[$path] ?? 0;
+        $idx = bucketIndex($b, $bucketSize);
+        if (!isset($buckets[$idx])) $buckets[$idx] = [];
+        $buckets[$idx][] = $path;
+    }
+    return $buckets;
+}
 
 /* =====================================================
    ENSURE DIRS
@@ -205,6 +222,11 @@ if (!file_exists($STATE_FILE)) {
         else $dark[] = $p;
     }
 
+    $bucketSize = 12;
+    $bucketsAll = buildBuckets($images, $brightness, $bucketSize);
+    $bucketsLight = buildBuckets($light, $brightness, $bucketSize);
+    $bucketsDark = buildBuckets($dark, $brightness, $bucketSize);
+
     // compute tiles grid
     $cols = (int)ceil($width_px / $tile);
     $rows = (int)ceil($height_px / $tile);
@@ -234,6 +256,10 @@ if (!file_exists($STATE_FILE)) {
         "dark" => $dark,
         "brightness" => $brightness,
         "usage" => $usage,
+        "bucketSize" => $bucketSize,
+        "buckets_all" => $bucketsAll,
+        "buckets_light" => $bucketsLight,
+        "buckets_dark" => $bucketsDark,
 
         "tile_index" => 0,
         "done" => 0
@@ -444,6 +470,46 @@ if ($state["stage"] === "mosaic") {
     $chunkTiles = (int)$state["chunkTiles"];
     $startIndex = (int)$state["tile_index"];
     $endIndex = min($startIndex + $chunkTiles, $totalTiles);
+    $bucketSize = (int)($state["bucketSize"] ?? 12);
+    $bucketsLight = $state["buckets_light"] ?? [];
+    $bucketsDark = $state["buckets_dark"] ?? [];
+    $bucketsAll = $state["buckets_all"] ?? [];
+    $bucketMaxIndex = (int)floor(255 / max(1, $bucketSize));
+    $tileCache = [];
+    $tileCacheOrder = [];
+    $tileCacheLimit = 60;
+
+    $loadTile = function($path) use ($tile, &$tileCache, &$tileCacheOrder, $tileCacheLimit) {
+        if (isset($tileCache[$path])) {
+            return $tileCache[$path];
+        }
+
+        $src = @imagecreatefromstring(@file_get_contents($path));
+        if (!$src) return null;
+
+        $thumb = imagecreatetruecolor($tile, $tile);
+        imagealphablending($thumb, true);
+        imagesavealpha($thumb, true);
+        imagecopyresampled(
+            $thumb, $src,
+            0, 0, 0, 0,
+            $tile, $tile,
+            imagesx($src), imagesy($src)
+        );
+        imagedestroy($src);
+
+        $tileCache[$path] = $thumb;
+        $tileCacheOrder[] = $path;
+        if (count($tileCacheOrder) > $tileCacheLimit) {
+            $evict = array_shift($tileCacheOrder);
+            if ($evict !== null && isset($tileCache[$evict])) {
+                imagedestroy($tileCache[$evict]);
+                unset($tileCache[$evict]);
+            }
+        }
+
+        return $thumb;
+    };
 
     for ($idx = $startIndex; $idx < $endIndex; $idx++) {
 
@@ -469,17 +535,32 @@ if ($state["stage"] === "mosaic") {
 
         $insideText = ($m > 200);
 
-        $set = $insideText ? ($state["light"] ?? []) : ($state["dark"] ?? []);
-        // fallback if one side empty
-        if (!$set) $set = $state["images"];
-
         $target = $insideText ? $TARGET_TEXT : $TARGET_BG;
+
+        $bucketIndex = bucketIndex($target, $bucketSize);
+        $buckets = $insideText ? $bucketsLight : $bucketsDark;
+        if (!$buckets) $buckets = $bucketsAll;
+
+        $candidateSet = [];
+        for ($step = 0; $step <= $bucketMaxIndex; $step++) {
+            $low = $bucketIndex - $step;
+            $high = $bucketIndex + $step;
+            if ($low >= 0 && !empty($buckets[$low])) {
+                $candidateSet = $buckets[$low];
+                break;
+            }
+            if ($high <= $bucketMaxIndex && !empty($buckets[$high])) {
+                $candidateSet = $buckets[$high];
+                break;
+            }
+        }
+        if (!$candidateSet) $candidateSet = $state["images"];
 
         // pick best match: brightness distance + reuse penalty
         $best = null;
         $bestScore = 1e18;
 
-        foreach ($set as $imgPath) {
+        foreach ($candidateSet as $imgPath) {
             $b = $state["brightness"][$imgPath] ?? 0;
             $u = $state["usage"][$imgPath] ?? 0;
             $score = abs($b - $target) + ($u * 8);
@@ -492,15 +573,9 @@ if ($state["stage"] === "mosaic") {
         if ($best) {
             $state["usage"][$best] = ($state["usage"][$best] ?? 0) + 1;
 
-            $src = @imagecreatefromstring(@file_get_contents($best));
+            $src = $loadTile($best);
             if ($src) {
-                imagecopyresampled(
-                    $canvas, $src,
-                    $tx, $ty, 0, 0,
-                    $tile, $tile,
-                    imagesx($src), imagesy($src)
-                );
-                imagedestroy($src);
+                imagecopy($canvas, $src, $tx, $ty, 0, 0, $tile, $tile);
             }
         }
 
@@ -509,6 +584,9 @@ if ($state["stage"] === "mosaic") {
     }
 
     imagepng($canvas, $CANVAS_FILE);
+    foreach ($tileCache as $img) {
+        imagedestroy($img);
+    }
     imagedestroy($mask);
     imagedestroy($canvas);
 
