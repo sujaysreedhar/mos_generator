@@ -17,7 +17,7 @@ $FONT        = __DIR__ . "/fonts/Montserrat-Bold.ttf";
    HELPERS
 ===================================================== */
 function writeProgress($data) {
-    file_put_contents(__DIR__ . "/tmp/progress.json", json_encode($data));
+    file_put_contents(__DIR__ . "/tmp/progress.json", json_encode($data), LOCK_EX);
 }
 function readProgress() {
     return json_decode(@file_get_contents(__DIR__ . "/tmp/progress.json"), true);
@@ -233,7 +233,7 @@ if (!file_exists($STATE_FILE)) {
         "done" => 0
     ];
 
-    file_put_contents($STATE_FILE, json_encode($state));
+    file_put_contents($STATE_FILE, json_encode($state), LOCK_EX);
 
     writeProgress([
         "stage"=>"text",
@@ -397,7 +397,7 @@ if ($state["stage"] === "text") {
 
     // move to mosaic
     $state["stage"] = "mosaic";
-    file_put_contents($STATE_FILE, json_encode($state));
+    file_put_contents($STATE_FILE, json_encode($state), LOCK_EX);
 
     writeProgress([
         "stage"=>"mosaic",
@@ -506,7 +506,7 @@ if ($state["stage"] === "mosaic") {
     imagedestroy($mask);
     imagedestroy($canvas);
 
-    file_put_contents($STATE_FILE, json_encode($state));
+    file_put_contents($STATE_FILE, json_encode($state), LOCK_EX);
 
     // update progress
     writeProgress([
@@ -522,7 +522,7 @@ if ($state["stage"] === "mosaic") {
     // done with mosaic?
     if ($state["tile_index"] >= $totalTiles) {
         $state["stage"] = "export";
-        file_put_contents($STATE_FILE, json_encode($state));
+        file_put_contents($STATE_FILE, json_encode($state), LOCK_EX);
 
         writeProgress([
             "stage"=>"export",
