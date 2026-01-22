@@ -15,6 +15,6 @@ $data["cancel"] = true;
 $data["stage"] = $data["stage"] ?? "mosaic";
 $data["message"] = "Cancelling…";
 
-file_put_contents($progFile, json_encode($data));
+file_put_contents($progFile, json_encode($data), LOCK_EX);
 
 echo json_encode(["ok" => true, "message" => "Cancel requested"]);
